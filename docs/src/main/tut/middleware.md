@@ -24,18 +24,19 @@ libraryDependencies ++= Seq(
 and some imports.
 
 ```tut:silent
+import cats.data.Kleisli
 import cats.effect._
 import cats.implicits._
 import org.http4s._
-import org.http4s.implicits._
 import org.http4s.dsl.io._
+import org.http4s.implicits._
 ```
 
 Then, we can create a middleware that adds a header to successful responses from
 the wrapped service like this.
 
 ```tut:book
-def myMiddle(service: HttpService[IO], header: Header): HttpService[IO] = cats.data.Kleisli { req: Request[IO] =>
+def myMiddle(service: HttpRoutes[IO], header: Header): HttpRoutes[IO] = Kleisli { req: Request[IO] =>
   service(req).map {
     case Status.Successful(resp) =>
       resp.putHeaders(header)
@@ -56,15 +57,15 @@ service without a server. Because an `HttpService[F]` returns a `F[Response[F]]`
 we need to call `unsafeRunSync` on the result of the function to extract the `Response[F]`.
 
 ```tut:book
-val service = HttpService[IO] {
+val service = HttpRoutes.of[IO] {
   case GET -> Root / "bad" =>
     BadRequest()
   case _ =>
     Ok()
 }
 
-val goodRequest = Request[IO](Method.GET, uri("/"))
-val badRequest = Request[IO](Method.GET, uri("/bad"))
+val goodRequest = Request[IO](Method.GET, Uri.uri("/"))
+val badRequest = Request[IO](Method.GET, Uri.uri("/bad"))
 
 service.orNotFound(goodRequest).unsafeRunSync
 service.orNotFound(badRequest).unsafeRunSync
@@ -92,7 +93,7 @@ object MyMiddle {
       case resp => resp
     }
 
-  def apply(service: HttpService[IO], header: Header) =
+  def apply(service: HttpRoutes[IO], header: Header) =
     service.map(addHeader(_, header))
 }
 
@@ -119,14 +120,14 @@ middleware with other, unwrapped, services, or services wrapped in other middlew
 You can also wrap a single service in multiple layers of middleware. For example:
 
 ```tut:book
-val apiService = HttpService[IO] {
+val apiService = HttpRoutes.of[IO] {
   case GET -> Root / "api" =>
     Ok()
 }
 
 val aggregateService = apiService <+> MyMiddle(service, Header("SomeKey", "SomeValue"))
 
-val apiRequest = Request[IO](Method.GET, uri("/api"))
+val apiRequest = Request[IO](Method.GET, Uri.uri("/api"))
 
 aggregateService.orNotFound(goodRequest).unsafeRunSync
 aggregateService.orNotFound(apiRequest).unsafeRunSync
@@ -146,8 +147,68 @@ package. These include:
 * [Service Timeout]
 * [Jsonp]
 * [Virtual Host]
+* [Metrics]
 
 And a few others.
+
+### Metrics Middleware
+
+Apart from the middleware mentioned in the previous section. There is, as well,
+Out of the Box middleware for Dropwizard and Prometheus metrics
+
+#### Dropwizard Metrics Middleware
+
+To make use of this metrics middleware the following dependencies are needed:
+
+```scala
+libraryDependencies ++= Seq(
+  "org.http4s" %% "http4s-server" % http4sVersion,
+  "org.http4s" %% "http4s-dropwizard-metrics" % http4sVersion
+)
+```
+
+We can create a middleware that registers metrics prefixed with a
+provided prefix like this.
+
+```tut:silent
+import org.http4s.server.middleware.Metrics
+import org.http4s.metrics.dropwizard.Dropwizard
+import com.codahale.metrics.SharedMetricRegistries
+```
+```tut:book
+implicit val clock = Clock.create[IO]
+val registry = SharedMetricRegistries.getOrCreate("default")
+
+val meteredRoutes = Metrics[IO](Dropwizard(registry, "server"))(apiService)
+```
+
+#### Prometheus Metrics Middleware
+
+To make use of this metrics middleware the following dependencies are needed:
+
+```scala
+libraryDependencies ++= Seq(
+  "org.http4s" %% "http4s-server" % http4sVersion,
+  "org.http4s" %% "http4s-prometheus-metrics" % http4sVersion
+)
+```
+
+We can create a middleware that registers metrics prefixed with a
+provided prefix like this.
+
+```tut:silent
+import org.http4s.server.middleware.Metrics
+import org.http4s.metrics.prometheus.Prometheus
+import io.prometheus.client.CollectorRegistry
+```
+```tut:book
+implicit val clock = Clock.create[IO]
+val registry = new CollectorRegistry()
+
+val meteredRoutes = Prometheus[IO](registry, "server").map(
+  Metrics[IO](_)(apiService)
+)
+```
 
 [service]: ../service
 [dsl]: ../dsl
@@ -158,4 +219,5 @@ And a few others.
 [Service Timeout]: ../api/org/http4s/server/middleware/Timeout$
 [Jsonp]: ../api/org/http4s/server/middleware/Jsonp$
 [Virtual Host]: ../api/org/http4s/server/middleware/VirtualHost$
+[Metrics]: ../api/org/http4s/server/middleware/Metrics$
 [`Kleisli`]: https://typelevel.org/cats/datatypes/kleisli.html

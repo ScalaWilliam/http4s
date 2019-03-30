@@ -10,8 +10,8 @@ private final class BasicManager[F[_], A <: Connection[F]](builder: ConnectionBu
   def borrow(requestKey: RequestKey): F[NextConnection] =
     builder(requestKey).map(NextConnection(_, fresh = true))
 
-  override def shutdown(): F[Unit] =
-    F.pure(())
+  override def shutdown: F[Unit] =
+    F.unit
 
   override def invalidate(connection: A): F[Unit] =
     F.delay(connection.shutdown())

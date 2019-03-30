@@ -5,6 +5,7 @@ package middleware
 import cats.effect._
 import fs2.io.readInputStream
 import org.http4s.dsl.io._
+import org.http4s.Uri.uri
 import scala.io.Source
 
 /**
@@ -12,62 +13,65 @@ import scala.io.Source
   */
 class LoggerSpec extends Http4sSpec {
 
-  val testService = HttpService[IO] {
+  val testApp = HttpApp[IO] {
     case GET -> Root / "request" =>
       Ok("request response")
     case req @ POST -> Root / "post" =>
       Ok(req.body)
+    case _ =>
+      Ok()
   }
 
   def testResource = getClass.getResourceAsStream("/testresource.txt")
 
-  def body: EntityBody[IO] = readInputStream[IO](IO.pure(testResource), 4096)
+  def body: EntityBody[IO] =
+    readInputStream[IO](IO.pure(testResource), 4096, testBlockingExecutionContext)
 
   val expectedBody: String = Source.fromInputStream(testResource).mkString
 
   "ResponseLogger" should {
-    val responseLoggerService = ResponseLogger(true, true)(testService)
+    val app = ResponseLogger.httpApp(logHeaders = true, logBody = true)(testApp)
 
     "not affect a Get" in {
       val req = Request[IO](uri = uri("/request"))
-      responseLoggerService.orNotFound(req) must returnStatus(Status.Ok)
+      app(req) must returnStatus(Status.Ok)
     }
 
     "not affect a Post" in {
       val req = Request[IO](uri = uri("/post"), method = POST).withBodyStream(body)
-      val res = responseLoggerService.orNotFound(req)
+      val res = app(req)
       res must returnStatus(Status.Ok)
       res must returnBody(expectedBody)
     }
   }
 
   "RequestLogger" should {
-    val requestLoggerService = RequestLogger(true, true)(testService)
+    val app = RequestLogger.httpApp(logHeaders = true, logBody = true)(testApp)
 
     "not affect a Get" in {
       val req = Request[IO](uri = uri("/request"))
-      requestLoggerService.orNotFound(req) must returnStatus(Status.Ok)
+      app(req) must returnStatus(Status.Ok)
     }
 
     "not affect a Post" in {
       val req = Request[IO](uri = uri("/post"), method = POST).withBodyStream(body)
-      val res = requestLoggerService.orNotFound(req)
+      val res = app(req)
       res must returnStatus(Status.Ok)
       res must returnBody(expectedBody)
     }
   }
 
   "Logger" should {
-    val loggerService = Logger(true, true)(testService)
+    val app = Logger.httpApp(logHeaders = true, logBody = true)(testApp)
 
     "not affect a Get" in {
       val req = Request[IO](uri = uri("/request"))
-      loggerService.orNotFound(req) must returnStatus(Status.Ok)
+      app(req) must returnStatus(Status.Ok)
     }
 
     "not affect a Post" in {
       val req = Request[IO](uri = uri("/post"), method = POST).withBodyStream(body)
-      val res = loggerService.orNotFound(req)
+      val res = app(req)
       res must returnStatus(Status.Ok)
       res must returnBody(expectedBody)
     }

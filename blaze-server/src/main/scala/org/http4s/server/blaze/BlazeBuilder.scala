@@ -5,22 +5,45 @@ package blaze
 import cats.effect._
 import java.io.FileInputStream
 import java.net.InetSocketAddress
-import java.nio.ByteBuffer
 import java.security.{KeyStore, Security}
-import javax.net.ssl.{KeyManagerFactory, SSLContext, SSLEngine, TrustManagerFactory}
-import org.http4s.blaze.{BuildInfo => BlazeBuildInfo}
+import javax.net.ssl.{KeyManagerFactory, SSLContext, TrustManagerFactory}
 import org.http4s.blaze.channel
-import org.http4s.blaze.channel.SocketConnection
-import org.http4s.blaze.channel.nio1.NIO1SocketServerGroup
-import org.http4s.blaze.channel.nio2.NIO2SocketServerGroup
-import org.http4s.blaze.pipeline.LeafBuilder
-import org.http4s.blaze.pipeline.stages.{QuietTimeoutStage, SSLStage}
 import org.http4s.server.SSLKeyStoreSupport.StoreInfo
-import org.log4s.getLogger
+import org.http4s.syntax.all._
 import scala.collection.immutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
+/**
+  * BlazeBuilder is the component for the builder pattern aggregating
+  * different components to finally serve requests.
+  *
+  * Variables:
+  * @param socketAddress: Socket Address the server will be mounted at
+  * @param executionContext: Execution Context the underlying blaze futures
+  *    will be executed upon.
+  * @param idleTimeout: Period of Time a connection can remain idle before the
+  *    connection is timed out and disconnected.
+  *    Duration.Inf disables this feature.
+  * @param isNio2: Whether or not to use NIO2 or NIO1 Socket Server Group
+  * @param connectorPoolSize: Number of worker threads for the new Socket Server Group
+  * @param bufferSize: Buffer size to use for IO operations
+  * @param enableWebsockets: Enables Websocket Support
+  * @param sslBits: If defined enables secure communication to the server using the
+  *    sslContext
+  * @param isHttp2Enabled: Whether or not to enable Http2 Server Features
+  * @param maxRequestLineLength: Maximum request line to parse
+  *    If exceeded returns a 400 Bad Request.
+  * @param maxHeadersLen: Maximum data that composes the headers.
+  *    If exceeded returns a 400 Bad Request.
+  * @param serviceMounts: The services that are mounted on this server to serve.
+  *    These services get assembled into a Router with the longer prefix winning.
+  * @param serviceErrorHandler: The last resort to recover and generate a response
+  *    this is necessary to recover totality from the error condition.
+  * @param banner: Pretty log to display on server start. An empty sequence
+  *    such as Nil disables this
+  */
+@deprecated("Use BlazeServerBuilder instead", "0.19.0-M2")
 class BlazeBuilder[F[_]](
     socketAddress: InetSocketAddress,
     executionContext: ExecutionContext,
@@ -36,15 +59,9 @@ class BlazeBuilder[F[_]](
     serviceMounts: Vector[ServiceMount[F]],
     serviceErrorHandler: ServiceErrorHandler[F],
     banner: immutable.Seq[String]
-)(implicit F: Effect[F])
-    extends ServerBuilder[F]
-    with IdleTimeoutSupport[F]
-    with SSLKeyStoreSupport[F]
-    with SSLContextSupport[F]
-    with server.WebSocketSupport[F] {
+)(implicit protected val F: ConcurrentEffect[F], timer: Timer[F])
+    extends ServerBuilder[F] {
   type Self = BlazeBuilder[F]
-
-  private[this] val logger = getLogger
 
   private def copy(
       socketAddress: InetSocketAddress = socketAddress,
@@ -92,26 +109,28 @@ class BlazeBuilder[F[_]](
       maxHeadersLen: Int = maxHeadersLen): Self =
     copy(maxRequestLineLen = maxRequestLineLen, maxHeadersLen = maxHeadersLen)
 
-  override def withSSL(
+  def withSSL(
       keyStore: StoreInfo,
       keyManagerPassword: String,
-      protocol: String,
-      trustStore: Option[StoreInfo],
-      clientAuth: Boolean): Self = {
+      protocol: String = "TLS",
+      trustStore: Option[StoreInfo] = None,
+      clientAuth: SSLClientAuthMode = SSLClientAuthMode.NotRequested): Self = {
     val bits = KeyStoreBits(keyStore, keyManagerPassword, protocol, trustStore, clientAuth)
     copy(sslBits = Some(bits))
   }
 
-  override def withSSLContext(sslContext: SSLContext, clientAuth: Boolean): Self =
+  def withSSLContext(
+      sslContext: SSLContext,
+      clientAuth: SSLClientAuthMode = SSLClientAuthMode.NotRequested): Self =
     copy(sslBits = Some(SSLContextBits(sslContext, clientAuth)))
 
   override def bindSocketAddress(socketAddress: InetSocketAddress): Self =
     copy(socketAddress = socketAddress)
 
-  override def withExecutionContext(executionContext: ExecutionContext): BlazeBuilder[F] =
+  def withExecutionContext(executionContext: ExecutionContext): BlazeBuilder[F] =
     copy(executionContext = executionContext)
 
-  override def withIdleTimeout(idleTimeout: Duration): Self = copy(idleTimeout = idleTimeout)
+  def withIdleTimeout(idleTimeout: Duration): Self = copy(idleTimeout = idleTimeout)
 
   def withConnectorPoolSize(size: Int): Self = copy(connectorPoolSize = size)
 
@@ -119,23 +138,19 @@ class BlazeBuilder[F[_]](
 
   def withNio2(isNio2: Boolean): Self = copy(isNio2 = isNio2)
 
-  override def withWebSockets(enableWebsockets: Boolean): Self =
+  def withWebSockets(enableWebsockets: Boolean): Self =
     copy(enableWebSockets = enableWebsockets)
 
   def enableHttp2(enabled: Boolean): Self = copy(http2Support = enabled)
 
-  override def mountService(service: HttpService[F], prefix: String): Self = {
+  def mountService(service: HttpRoutes[F], prefix: String): Self = {
     val prefixedService =
       if (prefix.isEmpty || prefix == "/") service
       else {
-        val newCaret = prefix match {
-          case "/" => 0
-          case x if x.startsWith("/") => x.length
-          case x => x.length + 1
-        }
+        val newCaret = (if (prefix.startsWith("/")) 0 else 1) + prefix.length
 
         service.local { req: Request[F] =>
-          req.withAttribute(Request.Keys.PathInfoCaret(newCaret))
+          req.withAttribute(Request.Keys.PathInfoCaret, newCaret)
         }
       }
     copy(serviceMounts = serviceMounts :+ ServiceMount[F](prefixedService, prefix))
@@ -147,114 +162,30 @@ class BlazeBuilder[F[_]](
   def withBanner(banner: immutable.Seq[String]): Self =
     copy(banner = banner)
 
-  def start: F[Server[F]] = F.delay {
-    val aggregateService = Router(serviceMounts.map(mount => mount.prefix -> mount.service): _*)
-
-    def resolveAddress(address: InetSocketAddress) =
-      if (address.isUnresolved) new InetSocketAddress(address.getHostName, address.getPort)
-      else address
-
-    val pipelineFactory = { conn: SocketConnection =>
-      def requestAttributes(secure: Boolean) =
-        (conn.local, conn.remote) match {
-          case (local: InetSocketAddress, remote: InetSocketAddress) =>
-            AttributeMap(
-              AttributeEntry(
-                Request.Keys.ConnectionInfo,
-                Request.Connection(
-                  local = local,
-                  remote = remote,
-                  secure = secure
-                )))
-          case _ =>
-            AttributeMap.empty
-        }
-
-      def http1Stage(secure: Boolean) =
-        Http1ServerStage(
-          aggregateService,
-          requestAttributes(secure = secure),
-          executionContext,
-          enableWebSockets,
-          maxRequestLineLen,
-          maxHeadersLen,
-          serviceErrorHandler
-        )
-
-      def http2Stage(engine: SSLEngine) =
-        ProtocolSelector(
-          engine,
-          aggregateService,
-          maxRequestLineLen,
-          maxHeadersLen,
-          requestAttributes(secure = true),
-          executionContext,
-          serviceErrorHandler
-        )
-
-      def prependIdleTimeout(lb: LeafBuilder[ByteBuffer]) =
-        if (idleTimeout.isFinite) lb.prepend(new QuietTimeoutStage[ByteBuffer](idleTimeout))
-        else lb
-
-      getContext() match {
-        case Some((ctx, clientAuth)) =>
-          val engine = ctx.createSSLEngine()
-          engine.setUseClientMode(false)
-          engine.setNeedClientAuth(clientAuth)
-
-          var lb = LeafBuilder(
-            if (isHttp2Enabled) http2Stage(engine)
-            else http1Stage(secure = true)
-          )
-          lb = prependIdleTimeout(lb)
-          lb.prepend(new SSLStage(engine))
-
-        case None =>
-          if (isHttp2Enabled) logger.warn("HTTP/2 support requires TLS. Falling back to HTTP/1.")
-          var lb = LeafBuilder(http1Stage(secure = false))
-          lb = prependIdleTimeout(lb)
-          lb
-      }
+  def resource: Resource[F, Server[F]] = {
+    val httpApp = Router(serviceMounts.map(mount => mount.prefix -> mount.service): _*).orNotFound
+    var b = BlazeServerBuilder[F]
+      .bindSocketAddress(socketAddress)
+      .withExecutionContext(executionContext)
+      .withIdleTimeout(idleTimeout)
+      .withNio2(isNio2)
+      .withConnectorPoolSize(connectorPoolSize)
+      .withBufferSize(bufferSize)
+      .withWebSockets(enableWebSockets)
+      .enableHttp2(isHttp2Enabled)
+      .withMaxRequestLineLength(maxRequestLineLen)
+      .withMaxHeadersLength(maxHeadersLen)
+      .withHttpApp(httpApp)
+      .withServiceErrorHandler(serviceErrorHandler)
+      .withBanner(banner)
+    getContext().foreach {
+      case (ctx, clientAuth) =>
+        b = b.withSSLContext(ctx, clientAuth)
     }
-
-    val factory =
-      if (isNio2)
-        NIO2SocketServerGroup.fixedGroup(connectorPoolSize, bufferSize)
-      else
-        NIO1SocketServerGroup.fixedGroup(connectorPoolSize, bufferSize)
-
-    val address = resolveAddress(socketAddress)
-
-    // if we have a Failure, it will be caught by the effect
-    val serverChannel = factory.bind(address, pipelineFactory).get
-
-    val server = new Server[F] {
-      override def shutdown: F[Unit] = F.delay {
-        serverChannel.close()
-        factory.closeGroup()
-      }
-
-      override def onShutdown(f: => Unit): this.type = {
-        serverChannel.addShutdownHook(() => f)
-        this
-      }
-
-      val address: InetSocketAddress =
-        serverChannel.socketAddress
-
-      val isSecure = sslBits.isDefined
-
-      override def toString: String =
-        s"BlazeServer($address)"
-    }
-
-    banner.foreach(logger.info(_))
-    logger.info(
-      s"http4s v${BuildInfo.version} on blaze v${BlazeBuildInfo.version} started at ${server.baseUri}")
-    server
+    b.resource
   }
 
-  private def getContext(): Option[(SSLContext, Boolean)] = sslBits.map {
+  private def getContext(): Option[(SSLContext, SSLClientAuthMode)] = sslBits.map {
     case KeyStoreBits(keyStore, keyManagerPassword, protocol, trustStore, clientAuth) =>
       val ksStream = new FileInputStream(keyStore.path)
       val ks = KeyStore.getInstance("JKS")
@@ -290,14 +221,15 @@ class BlazeBuilder[F[_]](
   }
 }
 
+@deprecated("Use BlazeServerBuilder instead", "0.20.0-RC1")
 object BlazeBuilder {
-  def apply[F[_]](implicit F: Effect[F]): BlazeBuilder[F] =
+  def apply[F[_]](implicit F: ConcurrentEffect[F], timer: Timer[F]): BlazeBuilder[F] =
     new BlazeBuilder(
       socketAddress = ServerBuilder.DefaultSocketAddress,
       executionContext = ExecutionContext.global,
       idleTimeout = IdleTimeoutSupport.DefaultIdleTimeout,
       isNio2 = false,
-      connectorPoolSize = channel.defaultPoolSize,
+      connectorPoolSize = channel.DefaultPoolSize,
       bufferSize = 64 * 1024,
       enableWebSockets = true,
       sslBits = None,
@@ -310,4 +242,4 @@ object BlazeBuilder {
     )
 }
 
-private final case class ServiceMount[F[_]](service: HttpService[F], prefix: String)
+private final case class ServiceMount[F[_]](service: HttpRoutes[F], prefix: String)

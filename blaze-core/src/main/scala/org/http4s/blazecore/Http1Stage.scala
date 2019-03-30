@@ -7,7 +7,7 @@ import fs2._
 import fs2.Stream._
 import java.nio.ByteBuffer
 import java.time.Instant
-import org.http4s.blaze.http.http_parser.BaseExceptions.ParserException
+import org.http4s.blaze.http.parser.BaseExceptions.ParserException
 import org.http4s.blaze.pipeline.{Command, TailStage}
 import org.http4s.blaze.util.BufferTools
 import org.http4s.blaze.util.BufferTools.emptyBuffer
@@ -25,6 +25,8 @@ trait Http1Stage[F[_]] { self: TailStage[ByteBuffer] =>
   protected implicit def executionContext: ExecutionContext
 
   protected implicit def F: Effect[F]
+
+  protected def chunkBufferMaxSize: Int
 
   protected def doParseContent(buffer: ByteBuffer): Option[ByteBuffer]
 
@@ -121,7 +123,7 @@ trait Http1Stage[F[_]] { self: TailStage[ByteBuffer] =>
 
           case None => // use a cached chunk encoder for HTTP/1.1 without length of transfer encoding
             logger.trace("Using Caching Chunk Encoder")
-            new CachingChunkWriter(this, trailer)
+            new CachingChunkWriter(this, trailer, chunkBufferMaxSize)
         }
   }
 
@@ -173,7 +175,7 @@ trait Http1Stage[F[_]] { self: TailStage[ByteBuffer] =>
         def go(): Unit =
           try {
             val parseResult = doParseContent(currentBuffer)
-            logger.trace(s"ParseResult: $parseResult, content complete: ${contentComplete()}")
+            logger.debug(s"Parse result: $parseResult, content complete: ${contentComplete()}")
             parseResult match {
               case Some(result) =>
                 cb(Either.right(Chunk.byteBuffer(result).some))
@@ -219,7 +221,7 @@ trait Http1Stage[F[_]] { self: TailStage[ByteBuffer] =>
   protected def fatalError(t: Throwable, msg: String): Unit = {
     logger.error(t)(s"Fatal Error: $msg")
     stageShutdown()
-    sendOutboundCommand(Command.Error(t))
+    closePipeline(Some(t))
   }
 
   /** Cleans out any remaining body from the parser */

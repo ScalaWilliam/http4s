@@ -41,6 +41,9 @@ EOM
         git remote set-url origin git@github.com:${TRAVIS_REPO_SLUG}.git
         git config branch.${TRAVIS_BRANCH}.merge
         git config branch.${TRAVIS_BRANCH}.remote
+
+        # Need this so we can build the versions table
+        git fetch --tags
     fi
     return 0
 }
@@ -49,13 +52,4 @@ function cleanup_cache() {
     echo "Cleaning up the cache"
     find $HOME/.ivy2/cache -name "ivydata-*.properties" -print -delete
     find $HOME/.sbt        -name "*.lock"               -print -delete
-}
-
-function upload_codecov() {
-    if find . -name 'scoverage-data' -exec false {} +; then
-        echo "No codecov report found. Skipping upload."
-    else
-        echo "Uploading codecov"
-        bash <(curl -s https://codecov.io/bash)
-    fi
 }

@@ -2,7 +2,7 @@ package org.http4s
 
 import cats.effect.IO
 import org.http4s.Charset._
-import org.http4s.Http4s._
+import org.http4s.implicits._
 import org.http4s.headers._
 import org.specs2.mutable.Specification
 
@@ -23,17 +23,17 @@ class ResponderSpec extends Specification {
       resp.contentType should be(None)
       val c1 = resp
         .putHeaders(`Content-Length`.unsafeFromLong(4))
-        .withContentType(`Content-Type`(MediaType.`text/plain`))
+        .withContentType(`Content-Type`(MediaType.text.plain))
         .putHeaders(Host("foo"))
 
       c1.headers.count(_.is(`Content-Type`)) must_== (1)
       c1.headers.count(_.is(`Content-Length`)) must_== (1)
       (c1.headers must have).length(3)
-      c1.contentType must beSome(`Content-Type`(MediaType.`text/plain`))
+      c1.contentType must beSome(`Content-Type`(MediaType.text.plain))
 
-      val c2 = c1.withContentType(`Content-Type`(MediaType.`application/json`, `UTF-8`))
+      val c2 = c1.withContentType(`Content-Type`(MediaType.application.json, `UTF-8`))
 
-      c2.contentType must beSome(`Content-Type`(MediaType.`application/json`, `UTF-8`))
+      c2.contentType must beSome(`Content-Type`(MediaType.application.json, `UTF-8`))
       c2.headers.count(_.is(`Content-Type`)) must_== (1)
       c2.headers.count(_.is(`Content-Length`)) must_== (1)
       c2.headers.count(_.is(Host)) must_== (1)
@@ -52,7 +52,7 @@ class ResponderSpec extends Specification {
         resp.putHeaders(Connection("close".ci), `Content-Length`.unsafeFromLong(10), Host("foo"))
       (wHeader.headers.toList must have).length(3)
 
-      val newHeaders = wHeader.replaceAllHeaders(Date(HttpDate.now))
+      val newHeaders = wHeader.withHeaders(Date(HttpDate.now))
       (newHeaders.headers.toList must have).length(1)
       newHeaders.headers.get(Connection) must beNone
     }
@@ -62,7 +62,7 @@ class ResponderSpec extends Specification {
         resp.putHeaders(Connection("close".ci), `Content-Length`.unsafeFromLong(10), Host("foo"))
       (wHeader.headers.toList must have).length(3)
 
-      val newHeaders = wHeader.replaceAllHeaders(Headers(Date(HttpDate.now)))
+      val newHeaders = wHeader.withHeaders(Headers(Date(HttpDate.now)))
       (newHeaders.headers.toList must have).length(1)
       newHeaders.headers.get(Connection) must beNone
     }
@@ -78,23 +78,28 @@ class ResponderSpec extends Specification {
     }
 
     "Set cookie from tuple" in {
-      resp.addCookie("foo", "bar").cookies must_== List(org.http4s.Cookie("foo", "bar"))
+      resp.addCookie("foo", "bar").cookies must_== List(ResponseCookie("foo", "bar"))
     }
 
     "Set cookie from Cookie" in {
-      resp.addCookie(Cookie("foo", "bar")).cookies must_== List(org.http4s.Cookie("foo", "bar"))
+      resp.addCookie(ResponseCookie("foo", "bar")).cookies must_== List(
+        ResponseCookie("foo", "bar"))
     }
 
     "Set multiple cookies" in {
-      resp.addCookie(Cookie("foo", "bar")).addCookie(Cookie("baz", "quux")).cookies must_== List(
-        org.http4s.Cookie("foo", "bar"),
-        org.http4s.Cookie("baz", "quux"))
+      resp
+        .addCookie(ResponseCookie("foo", "bar"))
+        .addCookie(ResponseCookie("baz", "quux"))
+        .cookies must_== List(
+        ResponseCookie("foo", "bar"),
+        ResponseCookie("baz", "quux")
+      )
     }
 
     "Remove cookie" in {
-      val cookie = Cookie("foo", "bar")
+      val cookie = ResponseCookie("foo", "bar")
       resp.removeCookie(cookie).cookies must_== List(
-        org.http4s.Cookie("foo", "", expires = Option(HttpDate.Epoch), maxAge = Some(0L))
+        ResponseCookie("foo", "", expires = Option(HttpDate.Epoch), maxAge = Some(0L))
       )
     }
   }

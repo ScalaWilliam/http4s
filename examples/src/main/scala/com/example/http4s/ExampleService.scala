@@ -2,44 +2,41 @@ package com.example.http4s
 
 import cats.effect._
 import cats.implicits._
-import fs2.{Scheduler, Stream}
+import fs2.Stream
 import io.circe.Json
-import org.http4s._
-import org.http4s.MediaType._
 import org.http4s.circe._
 import org.http4s.dsl.Http4sDsl
 import org.http4s.headers._
+import org.http4s.multipart.Multipart
+import org.http4s.scalaxml._
 import org.http4s.server._
+import org.http4s.server.middleware.PushSupport._
 import org.http4s.server.middleware.authentication.BasicAuth
 import org.http4s.server.middleware.authentication.BasicAuth.BasicAuthenticator
 import org.http4s.twirl._
-import scala.concurrent._
+import org.http4s._
+import scala.concurrent.ExecutionContext.global
 import scala.concurrent.duration._
 
-class ExampleService[F[_]](implicit F: Effect[F]) extends Http4sDsl[F] {
+class ExampleService[F[_]](implicit F: Effect[F], cs: ContextShift[F]) extends Http4sDsl[F] {
 
   // A Router can mount multiple services to prefixes.  The request is passed to the
   // service with the longest matching prefix.
-  def service(
-      implicit scheduler: Scheduler,
-      executionContext: ExecutionContext = ExecutionContext.global): HttpService[F] =
+  def routes(implicit timer: Timer[F]): HttpRoutes[F] =
     Router[F](
-      "" -> rootService,
-      "/auth" -> authService,
-      "/science" -> new ScienceExperiments[F].service
+      "" -> rootRoutes,
+      "/auth" -> authRoutes
     )
 
-  def rootService(
-      implicit scheduler: Scheduler,
-      executionContext: ExecutionContext): HttpService[F] =
-    HttpService[F] {
+  def rootRoutes(implicit timer: Timer[F]): HttpRoutes[F] =
+    HttpRoutes.of[F] {
       case GET -> Root =>
         // Supports Play Framework template -- see src/main/twirl.
         Ok(html.index())
 
       case _ -> Root =>
         // The default route result is NotFound. Sometimes MethodNotAllowed is more appropriate.
-        MethodNotAllowed()
+        MethodNotAllowed(Allow(GET))
 
       case GET -> Root / "ping" =>
         // EntityEncoder allows for easy conversion of types to a response body
@@ -56,30 +53,30 @@ class ExampleService[F[_]](implicit F: Effect[F]) extends Http4sDsl[F] {
 
       case GET -> Root / "redirect" =>
         // Not every response must be Ok using a EntityEncoder: some have meaning only for specific types
-        TemporaryRedirect(Location(uri("/http4s/")))
+        TemporaryRedirect(Location(Uri.uri("/http4s/")))
 
       case GET -> Root / "content-change" =>
         // EntityEncoder typically deals with appropriate headers, but they can be overridden
-        Ok("<h2>This will have an html content type!</h2>", `Content-Type`(`text/html`))
+        Ok("<h2>This will have an html content type!</h2>", `Content-Type`(MediaType.text.html))
 
       case req @ GET -> "static" /: path =>
         // captures everything after "/static" into `path`
         // Try http://localhost:8080/http4s/static/nasa_blackhole_image.jpg
         // See also org.http4s.server.staticcontent to create a mountable service for static content
-        StaticFile.fromResource(path.toString, Some(req)).getOrElseF(NotFound())
+        StaticFile.fromResource(path.toString, global, Some(req)).getOrElseF(NotFound())
 
       ///////////////////////////////////////////////////////////////
       //////////////// Dealing with the message body ////////////////
       case req @ POST -> Root / "echo" =>
         // The body can be used in the response
-        Ok(req.body).map(_.putHeaders(`Content-Type`(`text/plain`)))
+        Ok(req.body).map(_.putHeaders(`Content-Type`(MediaType.text.plain)))
 
       case GET -> Root / "echo" =>
         Ok(html.submissionForm("echo data"))
 
       case req @ POST -> Root / "echo2" =>
         // Even more useful, the body can be transformed in the response
-        Ok(req.body.drop(6), `Content-Type`(`text/plain`))
+        Ok(req.body.drop(6), `Content-Type`(MediaType.text.plain))
 
       case GET -> Root / "echo2" =>
         Ok(html.submissionForm("echo data"))
@@ -88,8 +85,8 @@ class ExampleService[F[_]](implicit F: Effect[F]) extends Http4sDsl[F] {
         // EntityDecoders allow turning the body into something useful
         req
           .decode[UrlForm] { data =>
-            data.values.get("sum") match {
-              case Some(Seq(s, _*)) =>
+            data.values.get("sum").flatMap(_.uncons) match {
+              case Some((s, _)) =>
                 val sum = s.split(' ').filter(_.length > 0).map(_.trim.toInt).sum
                 Ok(sum.toString)
 
@@ -141,43 +138,39 @@ class ExampleService[F[_]](implicit F: Effect[F]) extends Http4sDsl[F] {
 
       ///////////////////////////////////////////////////////////////
       //////////////////////// Server Push //////////////////////////
-      /*
-  case req @ GET -> Root / "push" =>
-    // http4s intends to be a forward looking library made with http2.0 in mind
-    val data = <html><body><img src="image.jpg"/></body></html>
-    Ok(data)
-      .withContentType(Some(`Content-Type`(`text/html`)))
-      .push("/image.jpg")(req)
-       */
+      case req @ GET -> Root / "push" =>
+        // http4s intends to be a forward looking library made with http2.0 in mind
+        val data = <html><body><img src="image.jpg"/></body></html>
+        Ok(data)
+          .map(_.withContentType(`Content-Type`(MediaType.text.`html`)))
+          .map(_.push("/image.jpg")(req))
 
       case req @ GET -> Root / "image.jpg" =>
         StaticFile
-          .fromResource("/nasa_blackhole_image.jpg", Some(req))
+          .fromResource("/nasa_blackhole_image.jpg", global, Some(req))
           .getOrElseF(NotFound())
 
       ///////////////////////////////////////////////////////////////
       //////////////////////// Multi Part //////////////////////////
-      /* TODO fs2 port
-    case req @ GET -> Root / "form" =>
-      Ok(html.form())
+      case GET -> Root / "form" =>
+        Ok(html.form())
 
-    case req @ POST -> Root / "multipart" =>
-      req.decode[Multipart] { m =>
-        Ok(s"""Multipart Data\nParts:${m.parts.length}\n${m.parts.map { case f: Part => f.name }.mkString("\n")}""")
-      }
-     */
+      case req @ POST -> Root / "multipart" =>
+        req.decode[Multipart[F]] { m =>
+          Ok(s"""Multipart Data\nParts:${m.parts.length}\n${m.parts.map(_.name).mkString("\n")}""")
+        }
     }
 
   def helloWorldService: F[Response[F]] = Ok("Hello World!")
 
   // This is a mock data source, but could be a Process representing results from a database
-  def dataStream(n: Int)(implicit scheduler: Scheduler, ec: ExecutionContext): Stream[F, String] = {
+  def dataStream(n: Int)(implicit timer: Timer[F]): Stream[F, String] = {
     val interval = 100.millis
-    val stream =
-      scheduler
-        .awakeEvery[F](interval)
-        .map(_ => s"Current system time: ${System.currentTimeMillis()} ms\n")
-        .take(n.toLong)
+    val stream = Stream
+      .awakeEvery[F](interval)
+      .evalMap(_ => timer.clock.realTime(MILLISECONDS))
+      .map(time => s"Current system time: $time ms\n")
+      .take(n.toLong)
 
     Stream.emit(s"Starting $interval stream intervals, taking $n results\n\n") ++ stream
   }
@@ -194,10 +187,16 @@ class ExampleService[F[_]](implicit F: Effect[F]) extends Http4sDsl[F] {
   // AuthedService to an authentication store.
   val basicAuth: AuthMiddleware[F, String] = BasicAuth(realm, authStore)
 
-  def authService: HttpService[F] =
+  def authRoutes: HttpRoutes[F] =
     basicAuth(AuthedService[String, F] {
       // AuthedServices look like Services, but the user is extracted with `as`.
       case GET -> Root / "protected" as user =>
         Ok(s"This page is protected using HTTP authentication; logged in as $user")
     })
+}
+
+object ExampleService {
+
+  def apply[F[_]: Effect: ContextShift]: ExampleService[F] = new ExampleService[F]
+
 }

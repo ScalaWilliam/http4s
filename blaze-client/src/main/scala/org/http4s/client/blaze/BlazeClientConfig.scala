@@ -5,7 +5,7 @@ import java.nio.channels.AsynchronousChannelGroup
 import javax.net.ssl.SSLContext
 import org.http4s.headers.`User-Agent`
 import scala.concurrent.ExecutionContext
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration._
 
 /** Config object for the blaze clients
   *
@@ -31,11 +31,13 @@ import scala.concurrent.duration.Duration
   * @param maxResponseLineSize maximum length of the request line
   * @param maxHeaderLength maximum length of headers
   * @param maxChunkSize maximum size of chunked content chunks
+  * @param chunkBufferMaxSize Size of the buffer that is used when Content-Length header is not specified.
   * @param lenientParser a lenient parser will accept illegal chars but replaces them with � (0xFFFD)
   * @param bufferSize internal buffer size of the blaze client
   * @param executionContext custom executionContext to run async computations.
   * @param group custom `AsynchronousChannelGroup` to use other than the system default
   */
+@deprecated("Use BlazeClientBuilder", "0.19.0-M2")
 final case class BlazeClientConfig( // HTTP properties
     responseHeaderTimeout: Duration,
     idleTimeout: Duration,
@@ -52,6 +54,7 @@ final case class BlazeClientConfig( // HTTP properties
     maxResponseLineSize: Int,
     maxHeaderLength: Int,
     maxChunkSize: Int,
+    chunkBufferMaxSize: Int,
     lenientParser: Boolean,
     // pipeline management
     bufferSize: Int,
@@ -61,6 +64,7 @@ final case class BlazeClientConfig( // HTTP properties
   def endpointAuthentication: Boolean = checkEndpointIdentification
 }
 
+@deprecated("Use BlazeClientBuilder", "0.19.0-M2")
 object BlazeClientConfig {
 
   /** Default configuration of a blaze client. */
@@ -68,7 +72,7 @@ object BlazeClientConfig {
     BlazeClientConfig(
       responseHeaderTimeout = bits.DefaultResponseHeaderTimeout,
       idleTimeout = bits.DefaultTimeout,
-      requestTimeout = Duration.Inf,
+      requestTimeout = 1.minute,
       userAgent = bits.DefaultUserAgent,
       maxTotalConnections = bits.DefaultMaxTotalConnections,
       maxWaitQueueLimit = bits.DefaultMaxWaitQueueLimit,
@@ -78,6 +82,7 @@ object BlazeClientConfig {
       maxResponseLineSize = 4 * 1024,
       maxHeaderLength = 40 * 1024,
       maxChunkSize = Integer.MAX_VALUE,
+      chunkBufferMaxSize = 1024 * 1024,
       lenientParser = false,
       bufferSize = bits.DefaultBufferSize,
       executionContext = ExecutionContext.global,

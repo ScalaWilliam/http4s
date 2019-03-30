@@ -2,36 +2,63 @@ package org.http4s
 package server
 package middleware
 
+import cats._
+import cats.arrow.FunctionK
+import cats.implicits._
+import cats.data._
 import cats.effect._
+import cats.effect.Sync._
 import fs2._
 import org.http4s.util.CaseInsensitiveString
-import org.log4s.{Logger => SLogger}
+import org.log4s.getLogger
 
 /**
   * Simple Middleware for Logging All Requests and Responses
   */
 object Logger {
-  def apply[F[_]: Effect](
+  private[this] val logger = getLogger
+
+  def apply[G[_]: Bracket[?[_], Throwable], F[_]: Concurrent](
       logHeaders: Boolean,
       logBody: Boolean,
-      redactHeadersWhen: CaseInsensitiveString => Boolean = Headers.SensitiveHeaders.contains
-  )(httpService: HttpService[F]): HttpService[F] =
-    ResponseLogger(logHeaders, logBody, redactHeadersWhen)(
-      RequestLogger(logHeaders, logBody, redactHeadersWhen)(
-        httpService
-      )
+      fk: F ~> G,
+      redactHeadersWhen: CaseInsensitiveString => Boolean = Headers.SensitiveHeaders.contains,
+      logAction: Option[String => F[Unit]] = None
+  )(@deprecatedName('httpService) http: Http[G, F]): Http[G, F] = {
+    val log: String => F[Unit] = logAction.getOrElse { s =>
+      Sync[F].delay(logger.info(s))
+    }
+    ResponseLogger(logHeaders, logBody, fk, redactHeadersWhen, log.pure[Option])(
+      RequestLogger(logHeaders, logBody, fk, redactHeadersWhen, log.pure[Option])(http)
     )
+  }
+
+  def httpApp[F[_]: Concurrent](
+      logHeaders: Boolean,
+      logBody: Boolean,
+      redactHeadersWhen: CaseInsensitiveString => Boolean = Headers.SensitiveHeaders.contains,
+      logAction: Option[String => F[Unit]] = None
+  )(httpApp: HttpApp[F]): HttpApp[F] =
+    apply(logHeaders, logBody, FunctionK.id[F], redactHeadersWhen, logAction)(httpApp)
+
+  def httpRoutes[F[_]: Concurrent](
+      logHeaders: Boolean,
+      logBody: Boolean,
+      redactHeadersWhen: CaseInsensitiveString => Boolean = Headers.SensitiveHeaders.contains,
+      logAction: Option[String => F[Unit]] = None
+  )(httpRoutes: HttpRoutes[F]): HttpRoutes[F] =
+    apply(logHeaders, logBody, OptionT.liftK[F], redactHeadersWhen, logAction)(httpRoutes)
 
   def logMessage[F[_], A <: Message[F]](message: A)(
       logHeaders: Boolean,
       logBody: Boolean,
       redactHeadersWhen: CaseInsensitiveString => Boolean = Headers.SensitiveHeaders.contains)(
-      logger: SLogger)(implicit F: Effect[F]): F[Unit] = {
+      log: String => F[Unit])(implicit F: Sync[F]): F[Unit] = {
 
     val charset = message.charset
     val isBinary = message.contentType.exists(_.mediaType.binary)
     val isJson = message.contentType.exists(mT =>
-      mT.mediaType == MediaType.`application/json` || mT.mediaType == MediaType.`application/hal+json`)
+      mT.mediaType == MediaType.application.json || mT.mediaType == MediaType.application.`vnd.hal+json`)
 
     val isText = !isBinary || isJson
 
@@ -64,13 +91,16 @@ object Logger {
       Stream("").covary[F]
     }
 
-    if (!logBody && !logHeaders) F.unit
-    else {
-      bodyText
-        .map(body => s"$prelude $headers $body")
-        .map(text => logger.info(text))
-        .compile
-        .drain
-    }
+    def msg(body: String) =
+      (logHeaders, logBody) match {
+        case (false, false) => prelude
+        case _ => s"$prelude $headers $body"
+      }
+
+    bodyText
+      .map(msg)
+      .evalMap(log)
+      .compile
+      .drain
   }
 }

@@ -92,11 +92,11 @@ class Http1WriterSpec extends Http4sSpec {
   }
 
   "CachingChunkWriter" should {
-    runNonChunkedTests(tail => new CachingChunkWriter[IO](tail, IO.pure(Headers())))
+    runNonChunkedTests(tail => new CachingChunkWriter[IO](tail, IO.pure(Headers()), 1024 * 1024))
   }
 
   "CachingStaticWriter" should {
-    runNonChunkedTests(tail => new CachingChunkWriter[IO](tail, IO.pure(Headers())))
+    runNonChunkedTests(tail => new CachingChunkWriter[IO](tail, IO.pure(Headers()), 1024 * 1024))
   }
 
   "FlushingChunkWriter" should {
@@ -223,13 +223,13 @@ class Http1WriterSpec extends Http4sSpec {
     }
 
     val resource: Stream[IO, Byte] =
-      bracket(IO("foo"))({ str =>
+      bracket(IO("foo"))(_ => IO.unit).flatMap { str =>
         val it = str.iterator
         emit {
           if (it.hasNext) Some(it.next.toByte)
           else None
         }
-      }, _ => IO.unit).unNoneTerminate
+      }.unNoneTerminate
 
     "write a resource" in {
       val p = resource

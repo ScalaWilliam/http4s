@@ -2,9 +2,15 @@ package com.example.http4s
 package blaze
 
 import cats.effect._
-import com.example.http4s.ssl.SslExample
-import org.http4s.server.blaze.BlazeBuilder
+import cats.implicits._
 
-object BlazeHttp2Example extends SslExample[IO] {
-  def builder: BlazeBuilder[IO] = BlazeBuilder[IO].enableHttp2(true)
+object BlazeHttp2Example extends IOApp {
+  override def run(args: List[String]): IO[ExitCode] =
+    BlazeSslExampleApp
+      .builder[IO]
+      .enableHttp2(true)
+      .serve
+      .compile
+      .drain
+      .as(ExitCode.Success)
 }

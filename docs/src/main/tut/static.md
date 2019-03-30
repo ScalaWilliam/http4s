@@ -16,15 +16,36 @@ similar static file hoster, but they're often fast enough.
 ## Serving static files
 Http4s provides a few helpers to handle ETags for you, they're located in [StaticFile].
 
-```tut:book
+```tut:silent
 import cats.effect._
 import org.http4s._
 import org.http4s.dsl.io._
 import java.io.File
+```
 
-val service = HttpService[IO] {
+### Prerequisites
+
+Static file support uses a blocking API, so we'll need a blocking execution
+context:
+
+```tut:silent
+import java.util.concurrent._
+import scala.concurrent.ExecutionContext
+
+val blockingEc = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(4))
+```
+
+It also needs a main thread pool to shift back to.  This is provided when
+we're in IOApp, but you'll need one if you're following along in a REPL:
+
+```tut:silent
+implicit val cs: ContextShift[IO] = IO.contextShift(ExecutionContext.global)
+```
+
+```tut:silent
+val routes = HttpRoutes.of[IO] {
   case request @ GET -> Root / "index.html" =>
-    StaticFile.fromFile(new File("relative/path/to/index.html"), Some(request))
+    StaticFile.fromFile(new File("relative/path/to/index.html"), blockingEc, Some(request))
       .getOrElseF(NotFound()) // In case the file doesn't exist
 }
 ```
@@ -34,12 +55,12 @@ For simple file serving, it's possible to package resources with the jar and
 deliver them from there. Append to the `List` as needed.
 
 ```tut:book
-def static(file: String, request: Request[IO]) =
-  StaticFile.fromResource("/" + file, Some(request)).getOrElseF(NotFound())
+def static(file: String, blockingEc: ExecutionContext, request: Request[IO]) =
+  StaticFile.fromResource("/" + file, blockingEc, Some(request)).getOrElseF(NotFound())
 
-val service = HttpService[IO] {
+val routes = HttpRoutes.of[IO] {
   case request @ GET -> Root / path if List(".js", ".css", ".map", ".html", ".webm").exists(path.endsWith) =>
-    static(path, request)
+    static(path, blockingEc, request)
 }
 ```
 
@@ -56,20 +77,29 @@ libraryDependencies ++= Seq(
 
 Then, mount the `WebjarService` like any other service:
 
-```tut:book
+```tut:silent
 import org.http4s.server.staticcontent.webjarService
 import org.http4s.server.staticcontent.WebjarService.{WebjarAsset, Config}
+```
 
+```tut:book
 // only allow js assets
 def isJsAsset(asset: WebjarAsset): Boolean =
   asset.asset.endsWith(".js")
 
-val webjars: HttpService[IO] = webjarService(
+val webjars: HttpRoutes[IO] = webjarService(
   Config(
-    filter = isJsAsset
+    filter = isJsAsset,
+    blockingExecutionContext = blockingEc
   )
 )
 ```
+
+```tut:silent
+blockingEc.shutdown()
+```
+
+Assuming that the service is mounted as root on port `8080`, and you included the webjar `swagger-ui-3.20.9.jar` on your classpath, you would reach the assets with the path: `http://localhost:8080/swagger-ui/3.20.9/index.html`
 
 [StaticFile]: ../api/org/http4s/StaticFile$
 

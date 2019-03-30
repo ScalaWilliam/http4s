@@ -2,27 +2,35 @@ package org.http4s
 package server
 package blaze
 
-import cats.effect.Effect
+import cats.effect.{ConcurrentEffect, Timer}
 import java.nio.ByteBuffer
 import javax.net.ssl.SSLEngine
-import org.http4s.blaze.http.http20._
+import org.http4s.blaze.http.http2.{DefaultFlowStrategy, Http2Settings}
+import org.http4s.blaze.http.http2.server.{ALPNServerSelector, ServerPriorKnowledgeHandshaker}
 import org.http4s.blaze.pipeline.{LeafBuilder, TailStage}
+import org.http4s.blaze.util.TickWheelExecutor
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.Duration
+import io.chrisdavenport.vault._
 
 /** Facilitates the use of ALPN when using blaze http2 support */
 private[blaze] object ProtocolSelector {
-  def apply[F[_]: Effect](
+  def apply[F[_]](
       engine: SSLEngine,
-      service: HttpService[F],
+      httpApp: HttpApp[F],
       maxRequestLineLen: Int,
       maxHeadersLen: Int,
-      requestAttributes: AttributeMap,
+      chunkBufferMaxSize: Int,
+      requestAttributes: () => Vault,
       executionContext: ExecutionContext,
-      serviceErrorHandler: ServiceErrorHandler[F]): ALPNSelector = {
+      serviceErrorHandler: ServiceErrorHandler[F],
+      responseHeaderTimeout: Duration,
+      idleTimeout: Duration,
+      scheduler: TickWheelExecutor)(
+      implicit F: ConcurrentEffect[F],
+      timer: Timer[F]): ALPNServerSelector = {
 
     def http2Stage(): TailStage[ByteBuffer] = {
-
       val newNode = { streamId: Int =>
         LeafBuilder(
           new Http2NodeStage(
@@ -30,38 +38,47 @@ private[blaze] object ProtocolSelector {
             Duration.Inf,
             executionContext,
             requestAttributes,
-            service,
-            serviceErrorHandler))
+            httpApp,
+            serviceErrorHandler,
+            responseHeaderTimeout,
+            idleTimeout,
+            scheduler
+          ))
       }
 
-      Http2Stage(
-        nodeBuilder = newNode,
-        timeout = Duration.Inf,
-        ec = executionContext,
-        // since the request line is a header, the limits are bundled in the header limits
-        maxHeadersLength = maxHeadersLen,
-        maxInboundStreams = 256 // TODO: this is arbitrary...
-      )
+      val localSettings =
+        Http2Settings.default.copy(
+          maxConcurrentStreams = 100, // TODO: configurable?
+          maxHeaderListSize = maxHeadersLen)
+
+      new ServerPriorKnowledgeHandshaker(
+        localSettings = localSettings,
+        flowStrategy = new DefaultFlowStrategy(localSettings),
+        nodeBuilder = newNode)
     }
 
     def http1Stage(): TailStage[ByteBuffer] =
       Http1ServerStage[F](
-        service,
+        httpApp,
         requestAttributes,
         executionContext,
         enableWebSockets = false,
         maxRequestLineLen,
         maxHeadersLen,
-        serviceErrorHandler
+        chunkBufferMaxSize,
+        serviceErrorHandler,
+        responseHeaderTimeout,
+        idleTimeout,
+        scheduler
       )
 
-    def preference(protos: Seq[String]): String =
+    def preference(protos: Set[String]): String =
       protos
         .find {
           case "h2" | "h2-14" | "h2-15" => true
           case _ => false
         }
-        .getOrElse("http1.1")
+        .getOrElse("undefined")
 
     def select(s: String): LeafBuilder[ByteBuffer] =
       LeafBuilder(s match {
@@ -69,6 +86,6 @@ private[blaze] object ProtocolSelector {
         case _ => http1Stage()
       })
 
-    new ALPNSelector(engine, preference, select)
+    new ALPNServerSelector(engine, preference, select)
   }
 }

@@ -110,13 +110,13 @@ package object oauth1 {
     req.contentType match {
       case Some(t)
           if (req.method == Method.POST || req.method == Method.PUT) &&
-            t.mediaType == MediaType.`application/x-www-form-urlencoded` =>
-        req.as[UrlForm].flatMap { urlform =>
+            t.mediaType == MediaType.application.`x-www-form-urlencoded` =>
+        req.as[UrlForm].map { urlform =>
           val bodyparams = urlform.values.toSeq
-            .flatMap { case (k, vs) => if (vs.isEmpty) Seq(k -> "") else vs.map((k, _)) }
+            .flatMap { case (k, vs) => if (vs.isEmpty) Seq(k -> "") else vs.toList.map((k, _)) }
 
           implicit val charset = req.charset.getOrElse(Charset.`UTF-8`)
-          req.withBody(urlform).map(_ -> (qparams ++ bodyparams))
+          req.withEntity(urlform) -> (qparams ++ bodyparams)
         }
 
       case _ => F.pure(req -> qparams)

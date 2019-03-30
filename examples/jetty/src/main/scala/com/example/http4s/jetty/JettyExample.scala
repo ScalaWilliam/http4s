@@ -2,28 +2,29 @@ package com.example.http4s
 package jetty
 
 import cats.effect._
+import cats.implicits._
 import com.codahale.metrics.MetricRegistry
-import fs2._
-import fs2.StreamApp.ExitCode
-import org.http4s.dsl.Http4sDsl
+import org.http4s.metrics.dropwizard._
 import org.http4s.server.HttpMiddleware
 import org.http4s.server.jetty.JettyBuilder
-import org.http4s.server.metrics._
-import scala.concurrent.ExecutionContext.Implicits.global
+import org.http4s.server.middleware.Metrics
 
-object JettyExample extends JettyExampleApp[IO]
+object JettyExample extends IOApp {
+  override def run(args: List[String]): IO[ExitCode] =
+    JettyExampleApp.builder[IO].serve.compile.drain.as(ExitCode.Success)
+}
 
-class JettyExampleApp[F[_]: Effect] extends StreamApp[F] with Http4sDsl[F] {
-  val metricsRegistry: MetricRegistry = new MetricRegistry
-  val metrics: HttpMiddleware[F] = Metrics[F](metricsRegistry)
+object JettyExampleApp {
 
-  def stream(args: List[String], requestShutdown: F[Unit]): Stream[F, ExitCode] =
-    Scheduler(corePoolSize = 2).flatMap { implicit scheduler =>
-      JettyBuilder[F]
-        .bindHttp(8080)
-        .mountService(metrics(new ExampleService[F].service), "/http4s")
-        .mountService(metricsService(metricsRegistry), "/metrics")
-        .mountFilter(NoneShallPass, "/http4s/science/black-knight/*")
-        .serve
-    }
+  def builder[F[_]: ConcurrentEffect: Timer: ContextShift]: JettyBuilder[F] = {
+    val metricsRegistry: MetricRegistry = new MetricRegistry
+    val metrics: HttpMiddleware[F] = Metrics[F](Dropwizard(metricsRegistry, "server"))
+
+    JettyBuilder[F]
+      .bindHttp(8080)
+      .mountService(metrics(new ExampleService[F].routes), "/http4s")
+      .mountService(metricsService(metricsRegistry), "/metrics")
+      .mountFilter(NoneShallPass, "/black-knight/*")
+  }
+
 }

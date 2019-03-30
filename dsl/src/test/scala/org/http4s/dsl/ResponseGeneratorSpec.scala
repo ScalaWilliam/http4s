@@ -4,7 +4,8 @@ package dsl
 import cats._
 import cats.effect.IO
 import org.http4s.dsl.io._
-import org.http4s.headers.{Accept, `Content-Length`, `Content-Type`}
+import org.http4s.MediaType
+import org.http4s.headers.{Accept, Location, `Content-Length`, `Content-Type`}
 
 class ResponseGeneratorSpec extends Http4sSpec {
 
@@ -34,13 +35,13 @@ class ResponseGeneratorSpec extends Http4sSpec {
 
   "Explicitly added headers have priority" in {
     val w: EntityEncoder[IO, String] = EntityEncoder.encodeBy[IO, String](
-      EntityEncoder.stringEncoder[IO].headers.put(`Content-Type`(MediaType.`text/html`)))(
+      EntityEncoder.stringEncoder[IO].headers.put(`Content-Type`(MediaType.text.html)))(
       EntityEncoder.stringEncoder[IO].toEntity(_)
     )
 
     val resp: IO[Response[IO]] =
-      Ok("foo", `Content-Type`(MediaType.`application/json`))(Monad[IO], w)
-    resp must returnValue(haveMediaType(MediaType.`application/json`))
+      Ok("foo", `Content-Type`(MediaType.application json))(Monad[IO], w)
+    resp must returnValue(haveMediaType(MediaType.application json))
   }
 
   "NoContent() does not generate Content-Length" in {
@@ -96,5 +97,31 @@ class ResponseGeneratorSpec extends Http4sSpec {
       */
     val resp = Ok()
     resp.map(_.contentLength) must returnValue(Some(0))
+  }
+
+  "MovedPermanently() generates expected headers without body" in {
+    val location = Location(Uri.unsafeFromString("http://foo"))
+    val resp = MovedPermanently(location, Accept(MediaRange.`audio/*`))
+    resp must returnValue(
+      haveHeaders(
+        Headers(
+          `Content-Length`.zero,
+          location,
+          Accept(MediaRange.`audio/*`)
+        )))
+  }
+
+  "MovedPermanently() generates expected headers with body" in {
+    val location = Location(Uri.unsafeFromString("http://foo"))
+    val body = "foo"
+    val resp = MovedPermanently(location, body, Accept(MediaRange.`audio/*`))
+    resp must returnValue(
+      haveHeaders(
+        Headers(
+          `Content-Type`(MediaType.text.plain, Charset.`UTF-8`),
+          location,
+          Accept(MediaRange.`audio/*`),
+          `Content-Length`.unsafeFromLong(3)
+        )))
   }
 }

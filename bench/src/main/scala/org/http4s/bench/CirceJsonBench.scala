@@ -1,10 +1,11 @@
 package org.http4s
 package bench
 
+import java.util.concurrent.TimeUnit
+
 import cats.effect.IO
 import io.circe._
 import io.circe.parser._
-import java.util.concurrent.TimeUnit
 import org.http4s.circe._
 import org.openjdk.jmh.annotations._
 
@@ -24,7 +25,10 @@ class CirceJsonBench {
 
   @Benchmark
   def decode_adaptive(in: BenchState): Either[DecodeFailure, Json] =
-    jsonDecoderAdaptive[IO](in.cutoff).decode(in.req, strict = true).value.unsafeRunSync
+    jsonDecoderAdaptive[IO](in.cutoff, MediaType.application.json)
+      .decode(in.req, strict = true)
+      .value
+      .unsafeRunSync
 }
 
 object CirceJsonBench {
@@ -46,7 +50,7 @@ object CirceJsonBench {
       val arraySize = (approxContentLength.toDouble /
         jsonStr.getBytes("UTF-8").length.toDouble).round.toInt
       val json = Json.arr((1 to arraySize).map(_ => obj): _*)
-      req = Request[IO]().withBody(json).unsafeRunSync
+      req = Request[IO]().withEntity(json)
       println(
         s"Array size: $arraySize; Approx. Content-Length: $approxContentLength; Content-Length: ${req.contentLength}")
     }

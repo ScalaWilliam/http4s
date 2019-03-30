@@ -4,20 +4,21 @@ package testing
 import cats.Eq
 import cats.implicits._
 import cats.effect._
+import cats.effect.implicits._
 import cats.effect.laws.util.TestContext
 import cats.effect.laws.util.TestInstances._
 import cats.laws._
 import cats.laws.discipline._
 import org.scalacheck.{Arbitrary, Prop, Shrink}
 
-trait EntityCodecLaws[F[_], A] extends EntityEncoderLaws[F, A] with ToIOSyntax {
+trait EntityCodecLaws[F[_], A] extends EntityEncoderLaws[F, A] {
   implicit def effect: Effect[F]
   implicit def encoder: EntityEncoder[F, A]
   implicit def decoder: EntityDecoder[F, A]
 
   def entityCodecRoundTrip(a: A): IsEq[IO[Either[DecodeFailure, A]]] =
     (for {
-      entity <- encoder.toEntity(a)
+      entity <- effect.delay(encoder.toEntity(a))
       message = Request(body = entity.body, headers = encoder.headers)
       a0 <- decoder.decode(message, strict = true).value
     } yield a0).toIO <-> IO.pure(Right(a))

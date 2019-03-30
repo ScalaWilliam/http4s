@@ -22,18 +22,19 @@ And we need some imports.
 import cats.effect._
 import org.http4s._
 import org.http4s.dsl.io._
+import org.http4s.implicits._
 ```
 
 Let's start by making a simple service that returns a (relatively) large string
 in its body. We'll use `as[String]` to examine the body.
 
 ```tut:book
-val service = HttpService[IO] {
+val service = HttpRoutes.of[IO] {
   case _ =>
     Ok("I repeat myself when I'm under stress. " * 3)
 }
 
-val request = Request[IO](Method.GET, uri("/"))
+val request = Request[IO](Method.GET, Uri.uri("/"))
 
 // Do not call 'unsafeRun' in your code - see note at bottom.
 val response = service.orNotFound(request).unsafeRunSync

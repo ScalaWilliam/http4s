@@ -4,11 +4,38 @@ import cats._
 import cats.arrow.Choice
 import cats.data.{Kleisli, OptionT}
 import cats.implicits._
+import cats.effect._
 import org.http4s.headers.{Connection, `Content-Length`}
 import org.http4s.syntax.string._
 import org.log4s.getLogger
+import scala.concurrent.duration._
+import scala.util.control.NonFatal
+import io.chrisdavenport.vault._
+import java.net.{InetAddress, InetSocketAddress}
 
 package object server {
+
+  object defaults {
+    val AsyncTimeout: Duration = 30.seconds
+    val Banner =
+      """|  _   _   _        _ _
+         | | |_| |_| |_ _ __| | | ___
+         | | ' \  _|  _| '_ \_  _(_-<
+         | |_||_\__|\__| .__/ |_|/__/
+         |             |_|""".stripMargin.split("\n").toList
+    val Host = InetAddress.getLoopbackAddress.getHostAddress
+    val HttpPort = 8080
+    val IdleTimeout: Duration = 30.seconds
+
+    /** The time to wait for a graceful shutdown */
+    val ShutdownTimeout: Duration = 30.seconds
+    val SocketAddress = InetSocketAddress.createUnresolved(Host, HttpPort)
+  }
+
+  object ServerRequestKeys {
+    val SecureSession: Key[Option[SecureSession]] =
+      Key.newKey[IO, Option[SecureSession]].unsafeRunSync
+  }
 
   /**
     * A middleware is a function of one [[Service]] to another, possibly of a
@@ -30,7 +57,7 @@ package object server {
   }
 
   /**
-    * An HTTP middleware converts an [[HttpService]] to another.
+    * An HTTP middleware converts an [[HttpRoutes]] to another.
     */
   type HttpMiddleware[F[_]] =
     Middleware[OptionT[F, ?], Request[F], Response[F], Request[F], Response[F]]
@@ -48,6 +75,7 @@ package object server {
   type SSLBits = SSLConfig
 
   object AuthMiddleware {
+
     def apply[F[_]: Monad, T](
         authUser: Kleisli[OptionT[F, ?], Request[F], T]
     ): AuthMiddleware[F, T] =
@@ -100,7 +128,7 @@ package object server {
         s"""Message failure handling request: ${req.method} ${req.pathInfo} from ${req.remoteAddr
           .getOrElse("<unknown>")}""")
       mf.toHttpResponse(req.httpVersion)
-    case t if !t.isInstanceOf[VirtualMachineError] =>
+    case NonFatal(t) =>
       serviceErrorLogger.error(t)(
         s"""Error servicing request: ${req.method} ${req.pathInfo} from ${req.remoteAddr.getOrElse(
           "<unknown>")}""")

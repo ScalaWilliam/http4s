@@ -5,17 +5,19 @@ package util
 import cats.effect._
 import cats.implicits._
 import fs2._
-import org.http4s.syntax.async._
+import org.http4s.internal.fromFuture
 import scala.concurrent._
 
 private[http4s] trait EntityBodyWriter[F[_]] {
 
   implicit protected def F: Effect[F]
 
+  protected val wroteHeader: Promise[Unit] = Promise[Unit]
+
   /** The `ExecutionContext` on which to run computations, assumed to be stack safe. */
   implicit protected def ec: ExecutionContext
 
-  /** Write a ByteVector to the wire.
+  /** Write a Chunk to the wire.
     * If a request is cancelled, or the stream is closed this method should
     * return a failed Future with Cancelled as the exception
     *
@@ -48,8 +50,8 @@ private[http4s] trait EntityBodyWriter[F[_]] {
     * @return the Task which when run will unwind the Process
     */
   def writeEntityBody(p: EntityBody[F]): F[Boolean] = {
-    val writeBody: F[Unit] = p.to(writeSink).compile.drain
-    val writeBodyEnd: F[Boolean] = F.fromFuture(writeEnd(Chunk.empty))
+    val writeBody: F[Unit] = p.through(writePipe).compile.drain
+    val writeBodyEnd: F[Boolean] = fromFuture(F.delay(writeEnd(Chunk.empty)))
     writeBody *> writeBodyEnd
   }
 
@@ -58,11 +60,11 @@ private[http4s] trait EntityBodyWriter[F[_]] {
     * If it errors the error stream becomes the stream, which performs an
     * exception flush and then the stream fails.
     */
-  private def writeSink: Sink[F, Byte] = { s =>
+  private def writePipe: Pipe[F, Byte, Unit] = { s =>
     val writeStream: Stream[F, Unit] =
-      s.chunks.evalMap(chunk => F.fromFuture(writeBodyChunk(chunk, flush = false)))
+      s.chunks.evalMap(chunk => fromFuture(F.delay(writeBodyChunk(chunk, flush = false))))
     val errorStream: Throwable => Stream[F, Unit] = e =>
-      Stream.eval(F.fromFuture(exceptionFlush())).flatMap(_ => Stream.raiseError(e))
+      Stream.eval(fromFuture(F.delay(exceptionFlush()))).flatMap(_ => Stream.raiseError[F](e))
     writeStream.handleErrorWith(errorStream)
   }
 }

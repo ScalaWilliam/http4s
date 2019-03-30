@@ -9,16 +9,18 @@
 
 package org.http4s
 
-import cats.effect.IO
+import cats.effect.{ContextShift, ExitCase, IO, Resource, Timer}
 import cats.implicits.{catsSyntaxEither => _, _}
 import fs2._
 import fs2.text._
+import java.util.concurrent.{ScheduledExecutorService, ScheduledThreadPoolExecutor, TimeUnit}
 import org.http4s.testing._
-import org.http4s.util.threads.newDaemonPool
+import org.http4s.util.threads.{newBlockingPool, newDaemonPool, threadFactory}
 import org.scalacheck._
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.util.{FreqMap, Pretty}
 import org.specs2.ScalaCheck
+import org.specs2.execute.{Result, Skipped}
 import org.specs2.matcher._
 import org.specs2.mutable.Specification
 import org.specs2.scalacheck.Parameters
@@ -38,14 +40,17 @@ trait Http4sSpec
     with ScalaCheck
     with AnyMatchers
     with OptionMatchers
-    with Http4s
+    with syntax.AllSyntax
     with ArbitraryInstances
     with FragmentsDsl
     with Discipline
     with IOMatchers
-    with Http4sMatchers {
+    with Http4sMatchers[IO] {
   implicit def testExecutionContext: ExecutionContext = Http4sSpec.TestExecutionContext
-  implicit def testScheduler: Scheduler = Http4sSpec.TestScheduler
+  val testBlockingExecutionContext: ExecutionContext = Http4sSpec.TestBlockingExecutionContext
+  implicit val contextShift: ContextShift[IO] = Http4sSpec.TestContextShift
+  implicit val timer: Timer[IO] = Http4sSpec.TestTimer
+  def scheduler: ScheduledExecutorService = Http4sSpec.TestScheduler
 
   implicit val params = Parameters(maxSize = 20)
 
@@ -63,13 +68,11 @@ trait Http4sSpec
         }
     }
 
-  implicit def arbitrarySegment: Arbitrary[Segment[Byte, Unit]] =
-    Arbitrary(arbitraryByteChunk.arbitrary.map(Segment.chunk))
-
   def writeToString[A](a: A)(implicit W: EntityEncoder[IO, A]): String =
     Stream
-      .eval(W.toEntity(a))
-      .flatMap { case Entity(body, _) => body }
+      .emit(W.toEntity(a))
+      .covary[IO]
+      .flatMap(_.body)
       .through(utf8Decode)
       .foldMonoid
       .compile
@@ -77,10 +80,11 @@ trait Http4sSpec
       .map(_.getOrElse(""))
       .unsafeRunSync
 
-  def writeToByteVector[A](a: A)(implicit W: EntityEncoder[IO, A]): Chunk[Byte] =
+  def writeToChunk[A](a: A)(implicit W: EntityEncoder[IO, A]): Chunk[Byte] =
     Stream
-      .eval(W.toEntity(a))
-      .flatMap { case Entity(body, _) => body }
+      .emit(W.toEntity(a))
+      .covary[IO]
+      .flatMap(_.body)
       .bufferAll
       .chunks
       .compile
@@ -117,16 +121,45 @@ trait Http4sSpec
   def beStatus(status: Status): Matcher[Response[IO]] = { resp: Response[IO] =>
     (resp.status == status) -> s" doesn't have status $status"
   }
+
+  def withResource[A](r: Resource[IO, A])(fs: A => Fragments): Fragments =
+    r match {
+      case Resource.Allocate(alloc) =>
+        alloc
+          .map {
+            case (a, release) =>
+              fs(a).append(step(release(ExitCase.Completed).unsafeRunSync()))
+          }
+          .unsafeRunSync()
+      case Resource.Bind(r, f) =>
+        withResource(r)(a => withResource(f(a))(fs))
+      case Resource.Suspend(r) =>
+        withResource(r.unsafeRunSync() /* ouch */ )(fs)
+    }
+
+  /** These tests are flaky on Travis.  Use sparingly and with great shame. */
+  def skipOnCi(f: => Result): Result =
+    if (sys.env.get("CI").isDefined) Skipped("Flakier than it's worth on CI")
+    else f
 }
 
 object Http4sSpec {
   val TestExecutionContext: ExecutionContext =
     ExecutionContext.fromExecutor(newDaemonPool("http4s-spec", timeout = true))
 
-  val TestScheduler: Scheduler = {
-    val (sched, _) = Scheduler
-      .allocate[IO](corePoolSize = 4, threadPrefix = "http4s-spec-scheduler")
-      .unsafeRunSync()
-    sched
+  val TestBlockingExecutionContext: ExecutionContext =
+    ExecutionContext.fromExecutor(newBlockingPool("http4s-spec-blocking"))
+
+  val TestContextShift: ContextShift[IO] =
+    IO.contextShift(TestExecutionContext)
+
+  val TestScheduler: ScheduledExecutorService = {
+    val s = new ScheduledThreadPoolExecutor(2, threadFactory(i => "http4s-test-scheduler", true))
+    s.setKeepAliveTime(10L, TimeUnit.SECONDS)
+    s.allowCoreThreadTimeOut(true)
+    s
   }
+
+  val TestTimer: Timer[IO] =
+    IO.timer(TestExecutionContext, TestScheduler)
 }

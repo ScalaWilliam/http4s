@@ -4,18 +4,16 @@ package json4s
 import cats._
 import cats.effect._
 import cats.syntax.all._
-import _root_.jawn.support.json4s.Parser
 import org.http4s.headers.`Content-Type`
 import org.json4s._
 import org.json4s.JsonAST.JValue
+import org.typelevel.jawn.support.json4s.Parser
 
 object CustomParser extends Parser(useBigDecimalForDouble = true, useBigIntForLong = true)
 
 trait Json4sInstances[J] {
-  import CustomParser.facade
-
-  implicit def jsonDecoder[F[_]: Sync]: EntityDecoder[F, JValue] =
-    jawn.jawnDecoder
+  implicit def jsonDecoder[F[_]](implicit F: Sync[F]): EntityDecoder[F, JValue] =
+    jawn.jawnDecoder(F, CustomParser.facade)
 
   def jsonOf[F[_], A](implicit reader: Reader[A], F: Sync[F]): EntityDecoder[F, A] =
     jsonDecoder.flatMapR { json =>
@@ -46,15 +44,15 @@ trait Json4sInstances[J] {
 
   protected def jsonMethods: JsonMethods[J]
 
-  implicit def jsonEncoder[F[_], A <: JValue](implicit F: Applicative[F]): EntityEncoder[F, A] =
+  implicit def jsonEncoder[F[_], A <: JValue]: EntityEncoder[F, A] =
     EntityEncoder
-      .stringEncoder(F, Charset.`UTF-8`)
+      .stringEncoder(Charset.`UTF-8`)
       .contramap[A] { json =>
         // TODO naive implementation materializes to a String.
         // Look into replacing after https://github.com/non/jawn/issues/6#issuecomment-65018736
         jsonMethods.compact(jsonMethods.render(json))
       }
-      .withContentType(`Content-Type`(MediaType.`application/json`))
+      .withContentType(`Content-Type`(MediaType.application.json))
 
   def jsonEncoderOf[F[_]: Applicative, A](implicit writer: Writer[A]): EntityEncoder[F, A] =
     jsonEncoder[F, JValue].contramap[A](writer.write)

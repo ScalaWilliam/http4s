@@ -6,22 +6,26 @@ title: Testing
 
 ## Introduction
 
-This document implements a simple `org.http4s.HttpService` and then
-walk through the results of applying inputs, i.e. `org.http4s.Request`, to the Service, i.e. `org.http4s.HttpService`.
+This document implements a simple `org.http4s.HttpRoutes` and then
+walk through the results of applying inputs, i.e. `org.http4s.Request`, to the service, i.e. `org.http4s.HttpService`.
 
 After reading this doc, the reader should feel comfortable writing a unit test using his/her favorite Scala testing library.
 
 Now, let's define an `org.http4s.HttpService`.
 
-```tut:book
+```tut:silent
 import cats.implicits._
 import io.circe._
 import io.circe.syntax._
 import io.circe.generic.semiauto._
-import cats.effect._, org.http4s._, org.http4s.dsl.io._
+import cats.effect._
+import org.http4s._
 import org.http4s.circe._
 import org.http4s.dsl.io._
+import org.http4s.implicits._
+```
 
+```tut:book
 final case class User(name: String, age: Int) 
 implicit val UserEncoder: Encoder[User] = deriveEncoder[User]
 
@@ -31,11 +35,11 @@ trait UserRepo[F[_]] {
 
 def service[F[_]](repo: UserRepo[F])(
       implicit F: Effect[F]
-): HttpService[F] = HttpService[F] {
+): HttpRoutes[F] = HttpRoutes.of[F] {
   case GET -> Root / "user" / id =>
-    repo.find(id).flatMap {
-      case Some(user) => Response(status = Status.Ok).withBody(user.asJson)
-      case None       => F.pure(Response(status = Status.NotFound))
+    repo.find(id).map {
+      case Some(user) => Response(status = Status.Ok).withEntity(user.asJson)
+      case None       => Response(status = Status.NotFound)
     }
 }
 ```

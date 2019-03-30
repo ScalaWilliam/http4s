@@ -3,7 +3,7 @@ package org.http4s.server.play
 import akka.stream.scaladsl.{Sink, Source}
 import akka.util.ByteString
 import cats.data.OptionT
-import cats.effect.{Async, Effect, IO}
+import cats.effect.{Async, ConcurrentEffect, IO}
 import fs2.Chunk
 import fs2.interop.reactivestreams._
 import org.http4s.server.play.PlayRouteBuilder.{PlayAccumulator, PlayRouting, PlayTargetStream}
@@ -13,7 +13,6 @@ import org.http4s.{
   EntityBody,
   Header,
   Headers,
-  HttpService,
   Method,
   Request,
   Response,
@@ -28,8 +27,8 @@ import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 
 class PlayRouteBuilder[F[_]](
-    service: HttpService[F]
-)(implicit F: Effect[F], executionContext: ExecutionContext) {
+    service: org.http4s.HttpRoutes[F]
+)(implicit F: ConcurrentEffect[F], executionContext: ExecutionContext) {
 
   type UnwrappedKleisli = Request[F] => OptionT[F, Response[F]]
   private[this] val unwrappedRun: UnwrappedKleisli = service.run
@@ -83,7 +82,6 @@ class PlayRouteBuilder[F[_]](
         val http4sRequest =
           requestHeaderToRequest(requestHeader, method).withBodyStream(requestBodyStream)
 
-        /** The .get here is safe because this was already proven in the pattern match of the caller **/
         val wrappedResponse: F[Response[F]] = unwrappedRun(http4sRequest).value.map(_.get)
         val wrappedResult: F[Result] = wrappedResponse.map { response =>
           Result(

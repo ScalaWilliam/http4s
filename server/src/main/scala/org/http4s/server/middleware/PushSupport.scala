@@ -4,37 +4,41 @@ package middleware
 
 import cats._
 import cats.data.{Kleisli, OptionT}
+import cats.effect._
 import cats.implicits._
 import org.log4s.getLogger
+import io.chrisdavenport.vault._
 
 object PushSupport {
   private[this] val logger = getLogger
 
-  implicit class PushOps[F[_]: Functor](response: F[Response[F]]) {
-    def push(url: String, cascade: Boolean = true)(implicit req: Request[F]): F[Response[F]] =
-      response.map { response =>
-        val newUrl = {
-          val script = req.scriptName
-          if (script.length > 0) {
-            val sb = new StringBuilder()
-            sb.append(script)
-            if (!url.startsWith("/")) sb.append('/')
-            sb.append(url)
-              .result()
-          } else url
-        }
+  implicit def http4sPushOps[F[_]: Functor](response: Response[F]): PushOps[F] =
+    new PushOps[F](response)
 
-        logger.trace(s"Adding push resource: $newUrl")
-
-        val newPushResouces = response.attributes
-          .get(pushLocationKey)
-          .map(_ :+ PushLocation(newUrl, cascade))
-          .getOrElse(Vector(PushLocation(newUrl, cascade)))
-
-        response.copy(
-          body = response.body,
-          attributes = response.attributes.put(PushSupport.pushLocationKey, newPushResouces))
+  final class PushOps[F[_]: Functor](response: Response[F]) extends AnyRef {
+    def push(url: String, cascade: Boolean = true)(implicit req: Request[F]): Response[F] = {
+      val newUrl = {
+        val script = req.scriptName
+        if (script.length > 0) {
+          val sb = new StringBuilder()
+          sb.append(script)
+          if (!url.startsWith("/")) sb.append('/')
+          sb.append(url).result()
+        } else url
       }
+
+      logger.trace(s"Adding push resource: $newUrl")
+
+      val newPushResouces = response.attributes
+        .lookup(pushLocationKey)
+        .map(_ :+ PushLocation(newUrl, cascade))
+        .getOrElse(Vector(PushLocation(newUrl, cascade)))
+
+      response.copy(
+        body = response.body,
+        attributes = response.attributes.insert(PushSupport.pushLocationKey, newPushResouces))
+    }
+
   }
 
   private def locToRequest[F[_]: Functor](push: PushLocation, req: Request[F]): Request[F] =
@@ -44,18 +48,18 @@ object PushSupport {
       r: Vector[PushLocation],
       req: Request[F],
       verify: String => Boolean,
-      route: HttpService[F])(implicit F: Monad[F]): F[Vector[PushResponse[F]]] =
+      routes: HttpRoutes[F])(implicit F: Monad[F]): F[Vector[PushResponse[F]]] =
     r.foldLeft(F.pure(Vector.empty[PushResponse[F]])) { (facc, v) =>
       if (verify(v.location)) {
         val newReq = locToRequest(v, req)
         if (v.cascade) facc.flatMap { accumulated => // Need to gather the sub resources
-          route
+          routes
             .mapF[OptionT[F, ?], Vector[PushResponse[F]]] {
               _.semiflatMap { response =>
                 response.attributes
-                  .get(pushLocationKey)
+                  .lookup(pushLocationKey)
                   .map { pushed =>
-                    collectResponse(pushed, req, verify, route).map(
+                    collectResponse(pushed, req, verify, routes).map(
                       accumulated ++ _ :+ PushResponse(v.location, response))
                   }
                   .getOrElse(F.pure(accumulated :+ PushResponse(v.location, response)))
@@ -64,7 +68,7 @@ object PushSupport {
             .apply(newReq)
             .getOrElse(Vector.empty[PushResponse[F]])
         } else {
-          route
+          routes
             .flatMapF { response =>
               OptionT.liftF(facc.map(_ :+ PushResponse(v.location, response)))
             }
@@ -76,37 +80,37 @@ object PushSupport {
 
   /** Transform the route such that requests will gather pushed resources
     *
-    * @param service HttpService to transform
+    * @param routes HttpRoutes to transform
     * @param verify method that determines if the location should be pushed
     * @return      Transformed route
     */
   def apply[F[_]: Monad](
-      service: HttpService[F],
-      verify: String => Boolean = _ => true): HttpService[F] = {
+      @deprecatedName('service) routes: HttpRoutes[F],
+      verify: String => Boolean = _ => true): HttpRoutes[F] = {
 
     def gather(req: Request[F])(resp: Response[F]): Response[F] =
       resp.attributes
-        .get(pushLocationKey)
+        .lookup(pushLocationKey)
         .map { fresource =>
-          val collected = collectResponse(fresource, req, verify, service)
+          val collected = collectResponse(fresource, req, verify, routes)
           resp.copy(
             body = resp.body,
-            attributes = resp.attributes.put(pushResponsesKey[F], collected)
+            attributes = resp.attributes.insert(pushResponsesKey[F], collected)
           )
         }
         .getOrElse(resp)
 
-    Kleisli(req => service(req).map(gather(req)))
+    Kleisli(req => routes(req).map(gather(req)))
   }
 
   private[PushSupport] final case class PushLocation(location: String, cascade: Boolean)
   private[http4s] final case class PushResponse[F[_]](location: String, resp: Response[F])
 
-  private[PushSupport] val pushLocationKey = AttributeKey[Vector[PushLocation]]
-  private[http4s] def pushResponsesKey[F[_]]: AttributeKey[F[Vector[PushResponse[F]]]] =
-    Keys.PushResponses.asInstanceOf[AttributeKey[F[Vector[PushResponse[F]]]]]
+  private[PushSupport] val pushLocationKey = Key.newKey[IO, Vector[PushLocation]].unsafeRunSync
+  private[http4s] def pushResponsesKey[F[_]]: Key[F[Vector[PushResponse[F]]]] =
+    Keys.PushResponses.asInstanceOf[Key[F[Vector[PushResponse[F]]]]]
 
   private[this] object Keys {
-    val PushResponses: AttributeKey[Any] = AttributeKey[Any]
+    val PushResponses: Key[Any] = Key.newKey[IO, Any].unsafeRunSync
   }
 }

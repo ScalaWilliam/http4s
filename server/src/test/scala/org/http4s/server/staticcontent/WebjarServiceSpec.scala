@@ -4,11 +4,13 @@ package staticcontent
 
 import cats.effect._
 import org.http4s.Method.{GET, POST}
+import org.http4s.Uri.uri
 import org.http4s.server.staticcontent.WebjarService.Config
 
 object WebjarServiceSpec extends Http4sSpec with StaticContentShared {
 
-  def s: HttpService[IO] = webjarService(Config[IO]())
+  def routes: HttpRoutes[IO] =
+    webjarService(Config[IO](blockingExecutionContext = testBlockingExecutionContext))
 
   "The WebjarService" should {
 
@@ -30,27 +32,27 @@ object WebjarServiceSpec extends Http4sSpec with StaticContentShared {
 
     "Not find missing file" in {
       val req = Request[IO](uri = uri("/test-lib/1.0.0/doesnotexist.txt"))
-      s.apply(req).value must returnValue(None)
+      routes.apply(req).value must returnValue(None)
     }
 
     "Not find missing library" in {
       val req = Request[IO](uri = uri("/1.0.0/doesnotexist.txt"))
-      s.apply(req).value must returnValue(None)
+      routes.apply(req).value must returnValue(None)
     }
 
     "Not find missing version" in {
       val req = Request[IO](uri = uri("/test-lib//doesnotexist.txt"))
-      s.apply(req).value must returnValue(None)
+      routes.apply(req).value must returnValue(None)
     }
 
     "Not find missing asset" in {
       val req = Request[IO](uri = uri("/test-lib/1.0.0/"))
-      s.apply(req).value must returnValue(None)
+      routes.apply(req).value must returnValue(None)
     }
 
     "Not match a request with POST" in {
       val req = Request[IO](POST, Uri(path = "/test-lib/1.0.0/testresource.txt"))
-      s.apply(req).value must returnValue(None)
+      routes.apply(req).value must returnValue(None)
     }
   }
 }

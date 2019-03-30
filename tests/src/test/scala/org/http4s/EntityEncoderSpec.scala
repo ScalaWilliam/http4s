@@ -2,8 +2,6 @@ package org.http4s
 
 import cats.Eq
 import cats.effect.IO
-import cats.effect.laws.discipline.arbitrary.catsEffectLawsArbitraryForIO
-import cats.effect.laws.util.TestContext
 import cats.implicits._
 import cats.laws.discipline.ContravariantTests
 import cats.laws.discipline.eq._
@@ -17,10 +15,6 @@ import scala.concurrent.duration._
 
 class EntityEncoderSpec extends Http4sSpec {
   "EntityEncoder" should {
-    "render IOs" in {
-      val hello = "Hello"
-      writeToString(IO.pure(hello)) must_== hello
-    }
 
     "render streams" in {
       val helloWorld: Stream[IO, String] = Stream("hello", "world")
@@ -36,8 +30,7 @@ class EntityEncoderSpec extends Http4sSpec {
     "render streams with chunked transfer encoding without wiping out other encodings" in {
       trait Foo
       implicit val FooEncoder: EntityEncoder[IO, Foo] =
-        EntityEncoder.encodeBy[IO, Foo](`Transfer-Encoding`(TransferCoding.gzip))(_ =>
-          IO.pure(Entity.empty))
+        EntityEncoder.encodeBy[IO, Foo](`Transfer-Encoding`(TransferCoding.gzip))(_ => Entity.empty)
       implicitly[EntityEncoder[IO, Stream[IO, Foo]]].headers.get(`Transfer-Encoding`) must beLike {
         case Some(coding) =>
           coding must_== `Transfer-Encoding`(TransferCoding.gzip, TransferCoding.chunked)
@@ -48,7 +41,7 @@ class EntityEncoderSpec extends Http4sSpec {
       trait Foo
       implicit val FooEncoder =
         EntityEncoder.encodeBy[IO, Foo](`Transfer-Encoding`(TransferCoding.chunked))(_ =>
-          IO.pure(Entity.empty))
+          Entity.empty)
       EntityEncoder[IO, Stream[IO, Foo]].headers.get(`Transfer-Encoding`) must beLike {
         case Some(coding) => coding must_== `Transfer-Encoding`(TransferCoding.chunked)
       }
@@ -65,7 +58,7 @@ class EntityEncoderSpec extends Http4sSpec {
         val w = new FileWriter(tmpFile)
         try w.write("render files test")
         finally w.close()
-        writeToString(tmpFile) must_== "render files test"
+        writeToString(tmpFile)(EntityEncoder.fileEncoder(testBlockingExecutionContext)) must_== "render files test"
       } finally {
         tmpFile.delete()
         ()
@@ -74,12 +67,12 @@ class EntityEncoderSpec extends Http4sSpec {
 
     "render input streams" in {
       val inputStream = new ByteArrayInputStream("input stream".getBytes(StandardCharsets.UTF_8))
-      writeToString(IO(inputStream)) must_== "input stream"
+      writeToString(IO(inputStream))(EntityEncoder.inputStreamEncoder(testBlockingExecutionContext)) must_== "input stream"
     }
 
     "render readers" in {
       val reader = new StringReader("string reader")
-      writeToString(IO(reader)) must_== "string reader"
+      writeToString(IO(reader))(EntityEncoder.readerEncoder(testBlockingExecutionContext)) must_== "string reader"
     }
 
     "render very long readers" in {
@@ -88,20 +81,22 @@ class EntityEncoderSpec extends Http4sSpec {
       // This is reproducible on input streams
       val longString = "string reader" * 5000
       val reader = new StringReader(longString)
-      writeToString[IO[Reader]](IO(reader)) must_== longString
+      writeToString[IO[Reader]](IO(reader))(
+        EntityEncoder.readerEncoder(testBlockingExecutionContext)) must_== longString
     }
 
     "render readers with UTF chars" in {
       val utfString = "A" + "\u08ea" + "\u00f1" + "\u72fc" + "C"
       val reader = new StringReader(utfString)
-      writeToString[IO[Reader]](IO(reader)) must_== utfString
+      writeToString[IO[Reader]](IO(reader))(
+        EntityEncoder.readerEncoder(testBlockingExecutionContext)) must_== utfString
     }
 
     "give the content type" in {
       EntityEncoder[IO, String].contentType must beSome(
-        `Content-Type`(MediaType.`text/plain`, Charset.`UTF-8`))
+        `Content-Type`(MediaType.text.plain, Charset.`UTF-8`))
       EntityEncoder[IO, Array[Byte]].contentType must beSome(
-        `Content-Type`(MediaType.`application/octet-stream`))
+        `Content-Type`(MediaType.application.`octet-stream`))
     }
 
     "work with local defined EntityEncoders" in {
@@ -119,8 +114,6 @@ class EntityEncoderSpec extends Http4sSpec {
   }
 
   {
-    implicit val ec: TestContext = TestContext()
-
     implicit val throwableEq: Eq[Throwable] =
       Eq.fromUniversalEquals
 
@@ -136,7 +129,7 @@ class EntityEncoderSpec extends Http4sSpec {
 
     implicit def entityEncoderEq[A: Arbitrary]: Eq[EntityEncoder[IO, A]] =
       Eq.by[EntityEncoder[IO, A], (Headers, A => IO[Entity[IO]])](enc =>
-        (enc.headers, enc.toEntity))
+        (enc.headers, a => IO.pure(enc.toEntity(a))))
 
     checkAll(
       "Contravariant[EntityEncoder[F, ?]]",

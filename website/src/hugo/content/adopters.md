@@ -6,6 +6,9 @@ title: Adopters
 
 ## Industrial
 
+[Banno Group inside of Jack Henry & Associates](https://banno.com)
+: Extensively utilizes http4s to deliver mission-critical banking services.
+
 [Cammy](http://www.cammy.com)
 : Has about 10 services in production at thousands of requests per second.
 
@@ -23,6 +26,12 @@ title: Adopters
 
 ## Libraries
 
+[Avias](https://github.com/fiadliel/avias)
+: Functional AWS API implementation for Scala
+
+[circuit-http4s](https://github.com/ChristopherDavenport/circuit-http4s)
+: CircuitBreaker backed Http4s Middlewares
+
 [CouchDB-Scala](https://github.com/beloglazov/couchdb-scala)
 : a purely functional Scala client for CouchDB
 
@@ -32,8 +41,23 @@ title: Adopters
 [http4s-directives](https://github.com/hamnis/http4s-directives)
 : Implementation of unfiltered-directives using http4s
 
+[http4s-timer](https://github.com/fiadliel/http4s-timer)
+: Adds timing capability to http4s, with a possible concrete implementation for New Relic
+
+[kamon-http4s](https://github.com/kamon-io/kamon-http4s)
+: Kamon support for http4s
+
+[pureconfig-http4s](https://github.com/pureconfig/pureconfig/tree/master/modules/http4s)
+: Adds support for http4s' `Uri` class to PureConfig.
+
 [rho](https://github.com/http4s/rho)
 : A self-documenting DSL built on http4s 
+
+[tsec](https://github.com/jmcardon/tsec)
+: A type-safe, functional, general purpose security and cryptography library
+
+[typedapi](https://github.com/pheymann/typedapi)
+: Build your API on the type level
 
 ## Open Source apps
 
@@ -55,6 +79,9 @@ title: Adopters
 [Nelson](https://verizon.github.io/nelson/)
 : Automated, multi-region container deployment
 
+[Raster Foundry](https://github.com/raster-foundry/raster-foundry)
+: An open source tool for finding, analyzing, and publishing geospatial imagery on the web
+
 [scala-pet-store](https://github.com/pauljamescleary/scala-pet-store)
 : An implementation of the java pet store using FP techniques in scala
 
@@ -66,6 +93,12 @@ title: Adopters
 
 [twitterstorm](https://github.com/ChristopherDavenport/twitterstorm)
 : Twitter Streaming API Processing Example Project 
+
+[http4s-index](https://github.com/stephennancekivell/http4s-index)
+: lists the files and folders becoming a simple light weight web server
+
+[Dashing](https://github.com/benfradet/dashing)
+: Dashboards to monitor an open source organization's health
 
 ## Giter8 templates
 
@@ -81,5 +114,5 @@ G8 templates provide a fast way to get started with SBT projects by just running
 <hr />
 
 <small>
-[<i class="fa fa-edit" aria-hidden="true"></i> Add yourself](https://github.com/http4s/http4s.org/edit/master/community/adopters.md), alphabetically, if you please.
+[<i class="fa fa-edit" aria-hidden="true"></i> Add yourself](https://github.com/http4s/http4s/edit/master/website/src/hugo/content/adopters.md), alphabetically, if you please.
 </small>
