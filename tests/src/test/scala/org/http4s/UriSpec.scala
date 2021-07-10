@@ -1262,4 +1262,9 @@ class UriSpec extends Http4sSuite {
   checkAll("Eq[Uri]", EqTests[Uri].eqv)
   checkAll("Order[Uri]", OrderTests[Uri].order)
   checkAll("Hash[Uri]", HashTests[Uri].hash)
+
+  test("URI with segment equals to raw URI"){
+    assertEquals(uri"/".addSegment("Test").addSegment(""), uri"/Test/")
+  }
+
 }
